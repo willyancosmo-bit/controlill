@@ -20,6 +20,10 @@ st.markdown("""
 html, body, [class*="css"] { font-family:'Inter','Segoe UI',sans-serif; background:#F4F6F8; color:#263238; }
 section[data-testid="stSidebar"] { background:#0F3D3E !important; }
 section[data-testid="stSidebar"] * { color:#FFFFFF !important; }
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] div { color:#263238 !important; background:#FFFFFF !important; }
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] span { color:#263238 !important; }
+section[data-testid="stSidebar"] input { color:#263238 !important; background:#FFFFFF !important; }
+section[data-testid="stSidebar"] [data-baseweb="popover"] * { color:#263238 !important; background:#FFFFFF !important; }
 section[data-testid="stSidebar"] hr { border-color:#1F4E5F !important; }
 .ctrl-header { background:#FFFFFF; border-bottom:3px solid #0F3D3E; padding:0.9rem 1.5rem;
     margin:-1rem -1rem 1.5rem -1rem; display:flex; align-items:baseline; gap:0.75rem; }
