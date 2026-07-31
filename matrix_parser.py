@@ -1,21 +1,13 @@
 """
-matrix_parser.py — Parser de PDF Matrix Connect para o Control.ILL
-
-Resultados validados com PDFs reais:
-  HEMATO.PDF        105/105  HMG,RET exato ✓
-  URINALISE.PDF     119/119  CHEMSTRY ✓
-  SOROTECA.PDF      200/200  36 códigos únicos limpos ✓
-
-Técnica: posição x/y via pdfplumber.
-Chunks da coluna Exames são concatenados antes de separar por vírgula,
-evitando artefatos de quebra de linha (ZNHD + L = ZNHDL etc).
+matrix_parser.py — Control.ILL
+Parser de PDF Matrix Connect + regras de importação por setor.
 """
 
 import re
 import io
 import pdfplumber
 
-# ── Palavras de layout — aparecem na coluna Exames mas não são códigos ────────
+# ── Palavras de layout — não são códigos de exame ─────────────────────────────
 SKIP_WORDS = {
     'LISTAGEM', 'DA', 'BANDEJA', 'RETIRADA', 'USUARIO', 'MOTIVO',
     'EXAMES', 'AMOSTRA', 'POSICAO', 'PACIENTE', 'ORIGEM', 'LIBERADA',
@@ -25,10 +17,6 @@ SKIP_WORDS = {
 }
 
 # ── Mapeamento código Matrix → nome canonical do reagente ─────────────────────
-#
-# O nome canonical é comparado de forma CASE-INSENSITIVE com o nome_exame do lote.
-# Isso evita falhas quando o usuário digitou manualmente com caixa diferente.
-#
 CODIGO_PARA_REAGENTE: dict[str, str] = {
     'ACU':    'Ácido Úrico',
     'ALB':    'Albumina',
@@ -59,99 +47,87 @@ CODIGO_PARA_REAGENTE: dict[str, str] = {
     'TGP':    'ALT',
     'TRI':    'Triglicerídeos',
     'URE':    'Ureia',
+    'VDRL':   'VDRL',          # ← VDRL aparece como VDRL no PDF
+    'BETAQL': 'B-hCG Qualitativo',
+    'BHCG':   'B-hCG Quantitativo',
+    'TROQN':  'Troponina Qualitativa',
+    'PROCAL': 'Procalcitonina',
+    'PROBNP': 'PRO-BNP-NT',
+    'DIMERO': 'Dímero-D',
+    'HIV':    'HIV Teste Rápido',
+    'COVID':  'COVIDAg',
+    'NS1':    'NS1',
+    'PTHi':   'PTHi',
+    'VANC':   'Vancomicina',
 }
 
 # ── Aliases: nomes alternativos que o usuário pode ter digitado ───────────────
-# Mapeia nome_normalizado (lower) → código Matrix
-# Exemplos: "tgo" → "AST", "ast" → "AST", "alt/tgp" → "ALT" etc.
 _ALIASES_EXTRA: dict[str, str] = {
-    # AST / TGO
-    'ast':                      'AST',
-    'tgo':                      'AST',
-    'ast/tgo':                  'AST',
-    'tgo/ast':                  'AST',
-    # ALT / TGP
-    'alt':                      'ALT',
-    'tgp':                      'ALT',
-    'alt/tgp':                  'ALT',
-    'tgp/alt':                  'ALT',
-    # Fosfatase
-    'fosfatase alcalina':       'Fosfatase Alcalina (ALKP)',
-    'fosfatase alcalina (alkp)':'Fosfatase Alcalina (ALKP)',
-    'alkp':                     'Fosfatase Alcalina (ALKP)',
-    'fal':                      'Fosfatase Alcalina (ALKP)',
-    # hCG
-    'beta-hcg qualitativo':     'B-hCG Qualitativo',
-    'β-hcg qualitativo':        'B-hCG Qualitativo',
-    'b-hcg qualitativo':        'B-hCG Qualitativo',
-    'beta-hcg quantitativo':    'B-hCG Quantitativo',
-    'β-hcg quantitativo':       'B-hCG Quantitativo',
-    'b-hcg quantitativo':       'B-hCG Quantitativo',
-    # PCR
-    'pcr':                      'Proteína C - Reativa',
-    'proteina c reativa':       'Proteína C - Reativa',
-    'proteína c reativa':       'Proteína C - Reativa',
-    'proteína c - reativa':     'Proteína C - Reativa',
-    # Proteínas
-    'proteinas totais':         'Proteínas Totais',
-    'proteínas totais':         'Proteínas Totais',
-    'prt':                      'Proteínas Totais',
-    # Colesterol
-    'col':                      'Colesterol Total',
-    'colesterol':               'Colesterol Total',
-    # Ácido úrico
-    'acu':                      'Ácido Úrico',
-    'acido urico':              'Ácido Úrico',
-    'ácido úrico':              'Ácido Úrico',
-    # Triglicerídeos
-    'triglicerideos':           'Triglicerídeos',
-    'triglicerídeos':           'Triglicerídeos',
-    'tri':                      'Triglicerídeos',
-    # PTH
-    'pth':                      'PTHi',
-    'pthi':                     'PTHi',
-    # CK-MB
-    'ck-mb':                    'CK-MB',
-    'ckmb':                     'CK-MB',
-    'ckbm':                     'CK-MB',
-    # Magnésio
-    'magnesio':                 'Magnésio',
-    'mag':                      'Magnésio',
-    # Fósforo
-    'fosforo':                  'Fósforo',
-    'fos':                      'Fósforo',
-    # Cálcio
-    'calcio':                   'Cálcio',
-    'cal':                      'Cálcio',
+    'ast':                       'AST',
+    'tgo':                       'AST',
+    'ast/tgo':                   'AST',
+    'tgo/ast':                   'AST',
+    'alt':                       'ALT',
+    'tgp':                       'ALT',
+    'alt/tgp':                   'ALT',
+    'tgp/alt':                   'ALT',
+    'fosfatase alcalina':        'Fosfatase Alcalina (ALKP)',
+    'fosfatase alcalina (alkp)': 'Fosfatase Alcalina (ALKP)',
+    'alkp':                      'Fosfatase Alcalina (ALKP)',
+    'fal':                       'Fosfatase Alcalina (ALKP)',
+    'beta-hcg qualitativo':      'B-hCG Qualitativo',
+    'b-hcg qualitativo':         'B-hCG Qualitativo',
+    'beta-hcg quantitativo':     'B-hCG Quantitativo',
+    'b-hcg quantitativo':        'B-hCG Quantitativo',
+    'pcr':                       'Proteína C - Reativa',
+    'proteina c reativa':        'Proteína C - Reativa',
+    'proteínas totais':          'Proteínas Totais',
+    'proteinas totais':          'Proteínas Totais',
+    'prt':                       'Proteínas Totais',
+    'col':                       'Colesterol Total',
+    'colesterol':                'Colesterol Total',
+    'acu':                       'Ácido Úrico',
+    'acido urico':               'Ácido Úrico',
+    'ácido úrico':               'Ácido Úrico',
+    'triglicerideos':            'Triglicerídeos',
+    'triglicerídeos':            'Triglicerídeos',
+    'tri':                       'Triglicerídeos',
+    'pth':                       'PTHi',
+    'pthi':                      'PTHi',
+    'ck-mb':                     'CK-MB',
+    'ckmb':                      'CK-MB',
+    'ckbm':                      'CK-MB',
+    'magnesio':                  'Magnésio',
+    'magnésio':                  'Magnésio',
+    'mag':                       'Magnésio',
+    'fosforo':                   'Fósforo',
+    'fósforo':                   'Fósforo',
+    'fos':                       'Fósforo',
+    'calcio':                    'Cálcio',
+    'cálcio':                    'Cálcio',
+    'cal':                       'Cálcio',
+    'vdrl':                      'VDRL',
 }
 
-# Pré-computar lookup reverso: lower(nome_canonical) → nome_canonical
+# Lookup reverso: lower(nome) → nome canonical
 _CANONICAL_LOWER: dict[str, str] = {
     v.lower(): v for v in CODIGO_PARA_REAGENTE.values()
 }
-
-# Adicionar aliases ao lookup
 for alias_lower, canonical in _ALIASES_EXTRA.items():
     _CANONICAL_LOWER[alias_lower] = canonical
 
 
-def _canonicalizar(nome: str) -> str | None:
-    """
-    Retorna o nome canonical do reagente dado qualquer variação de grafia.
-    Retorna None se não reconhecido.
-    """
+def _canonicalizar(nome: str):
     if not nome:
         return None
-    n = nome.strip().lower()
-    return _CANONICAL_LOWER.get(n)
+    return _CANONICAL_LOWER.get(nome.strip().lower())
 
 
-def _codigo_para_canonical(codigo: str) -> str | None:
-    """Retorna o nome canonical para um código Matrix."""
+def _codigo_para_canonical(codigo: str):
     return CODIGO_PARA_REAGENTE.get(codigo.upper())
 
 
-# ── Códigos gasometria ────────────────────────────────────────────────────────
+# ── Gasometria ────────────────────────────────────────────────────────────────
 GASOMETRIA_CHAR_CODES = frozenset({
     'BEB', 'CAI', 'HCO3', 'HCT', 'LAC', 'PCO2',
     'PH', 'PO2', 'SO2C', 'TCO2', 'TEMP',
@@ -170,38 +146,33 @@ REAGENTES_URINALISE = [
     'Salina',
 ]
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# PARSER PRINCIPAL
+# PARSER
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
     """
-    Lê um PDF Matrix Connect e retorna lista de (amostra, exames_normalizados).
-
-    - amostra : string numérica de 8–12 dígitos
-    - exames  : string com códigos separados por vírgula, ex: 'HMG,RET'
-
-    Aceita caminho em disco (str/Path) ou bytes em memória.
+    Lê PDF Matrix Connect e retorna lista de (amostra, exames_normalizados).
+    Aceita caminho em disco ou bytes em memória.
     """
     source = (io.BytesIO(filepath_or_bytes)
               if isinstance(filepath_or_bytes, (bytes, bytearray))
               else filepath_or_bytes)
 
-    EXAMES_COL_X: float | None = None
-    AMOSTRA_COL_X: float | None = None
+    EXAMES_COL_X = None
+    AMOSTRA_COL_X = None
     all_words: list[dict] = []
 
     with pdfplumber.open(source) as pdf:
         page_offset = 0.0
         for page in pdf.pages:
             words = page.extract_words()
-
             for w in words:
                 if w['text'] == 'Exames' and EXAMES_COL_X is None:
                     EXAMES_COL_X = float(w['x0'])
                 if w['text'] == 'Amostra' and AMOSTRA_COL_X is None:
                     AMOSTRA_COL_X = float(w['x0'])
-
             for w in words:
                 all_words.append({
                     'text': w['text'],
@@ -217,8 +188,8 @@ def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
 
     all_words.sort(key=lambda w: w['y'])
 
-    # ── Linhas de amostra ─────────────────────────────────────────────────────
-    amostra_rows: list[tuple[float, str]] = [
+    # Linhas de amostra
+    amostra_rows = [
         (w['y'], w['text'])
         for w in all_words
         if abs(w['x0'] - AMOSTRA_COL_X) < 15
@@ -227,11 +198,9 @@ def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
     if not amostra_rows:
         return []
 
-    # ── Chunks da coluna Exames ───────────────────────────────────────────────
-    # Apenas strings compostas de letras maiúsculas, dígitos e vírgulas
+    # Chunks da coluna Exames (apenas letras maiúsculas, dígitos e vírgulas)
     _CHUNK_RE = re.compile(r'^[A-Z0-9,]+$')
-
-    exames_chunks: list[tuple[float, str]] = []
+    exames_chunks = []
     for w in all_words:
         if w['x0'] < EXAMES_COL_X - 10:
             continue
@@ -242,32 +211,22 @@ def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
             continue
         exames_chunks.append((w['y'], tu))
 
-    # ── Associar chunks a cada amostra ───────────────────────────────────────
-    results: list[tuple[str, str]] = []
-
+    # Associar chunks a cada amostra
+    results = []
     for idx, (am_y, am_num) in enumerate(amostra_rows):
-        # Primeira amostra: não subir mais de 20pt (evita capturar cabeçalho)
-        # Última amostra: não descer mais de 30pt (evita capturar rodapé/notas)
-        if idx > 0:
-            y_start = (amostra_rows[idx - 1][0] + am_y) / 2
-        else:
-            y_start = am_y - 20.0
+        y_start = (amostra_rows[idx-1][0] + am_y) / 2 if idx > 0 else am_y - 20.0
+        y_end   = (am_y + amostra_rows[idx+1][0]) / 2 if idx < len(amostra_rows)-1 else am_y + 30.0
 
-        if idx < len(amostra_rows) - 1:
-            y_end = (am_y + amostra_rows[idx + 1][0]) / 2
-        else:
-            y_end = am_y + 30.0
-
-        chunks_in_range = sorted(
+        chunks = sorted(
             [(ey, et) for ey, et in exames_chunks if y_start < ey <= y_end],
             key=lambda x: x[0],
         )
 
-        raw_concat = ''.join(et for _, et in chunks_in_range)
+        raw = ''.join(et for _, et in chunks)
 
         seen: set[str] = set()
         final_codes: list[str] = []
-        for code in raw_concat.split(','):
+        for code in raw.split(','):
             code = code.strip()
             if (code
                     and code not in SKIP_WORDS
@@ -282,7 +241,7 @@ def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# APLICAR REGRAS DE IMPORTAÇÃO
+# APLICAR REGRAS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def aplicar_regras(
@@ -290,15 +249,9 @@ def aplicar_regras(
     lotes_abertos: list[dict],
 ) -> dict[int, set[str]]:
     """
-    Aplica as regras de importação Matrix a todos os lotes abertos.
-
-    parsed         : saída de parse_matrix_pdf()
-    lotes_abertos  : lista de dicts com keys id, setor, nome_exame
-
-    Retorna dict: lote_id → set de amostras a inserir
-
-    IMPORTANTE: a comparação nome_exame é CASE-INSENSITIVE e aceita aliases
-    (ex: 'TGO' == 'AST', 'TGP' == 'ALT', 'creatinina' == 'Creatinina').
+    Aplica regras de importação a todos os lotes abertos.
+    Retorna dict: lote_id → set de amostras a inserir.
+    Comparação de nome_exame é CASE-INSENSITIVE.
     """
     resultado: dict[int, set[str]] = {}
 
@@ -309,14 +262,12 @@ def aplicar_regras(
             lt_id      = lote['id']
             setor      = (lote.get('setor') or '').strip()
             nome_raw   = (lote.get('nome_exame') or '').strip()
-            # Canonicalizar o nome do lote para comparação robusta
             nome_canon = _canonicalizar(nome_raw) or nome_raw
             match      = False
 
-            # ── Hematologia: exatos HMG,RET ───────────────────────────────────
+            # ── Hematologia: exato HMG,RET ────────────────────────────────────
             if setor == 'Hematologia':
-                if exames_str.replace(' ', '').upper() == 'HMG,RET':
-                    # Comparação case-insensitive com lista de reagentes
+                if exames_str.replace(' ','').upper() == 'HMG,RET':
                     if nome_raw.lower() in [r.lower() for r in REAGENTES_HEMATOLOGIA]:
                         match = True
 
@@ -326,15 +277,14 @@ def aplicar_regras(
                     if nome_raw.lower() in [r.lower() for r in REAGENTES_URINALISE]:
                         match = True
 
-            # ── Qualquer setor: mapeamento por código individual ──────────────
-            # (inclui Imunobioquímica, Bioquímica, Gasometria como setor, etc.)
+            # ── Todos os outros setores: mapeamento por código ─────────────────
             else:
-                # Caso especial: Gasometria — códigos característicos
-                if nome_canon.lower() == 'gasometria' or nome_raw.lower() == 'gasometria':
+                # Gasometria — códigos característicos
+                if nome_canon.lower() in ('gasometria', 'gasometria arterial', 'gasometria venosa'):
                     if codigos & GASOMETRIA_CHAR_CODES:
                         match = True
                 else:
-                    # Mapeamento individual por código Matrix
+                    # Mapeamento individual (Imunobioquímica, Bioquímica, etc.)
                     for codigo in codigos:
                         mapped = _codigo_para_canonical(codigo)
                         if mapped and mapped.lower() == nome_canon.lower():
