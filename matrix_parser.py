@@ -8,11 +8,15 @@ import io
 import pdfplumber
 
 SKIP_WORDS = {
-    'LISTAGEM', 'DA', 'BANDEJA', 'RETIRADA', 'USUARIO', 'MOTIVO',
+    # Palavras do cabeçalho e rodapé do PDF Matrix
+    'LISTAGEM', 'DA', 'BANDEJA', 'RETIRADA', 'MOTIVO',
     'EXAMES', 'AMOSTRA', 'POSICAO', 'PACIENTE', 'ORIGEM', 'LIBERADA',
-    'DATA', 'HORA', 'OPERADOR', 'WILLIANC', 'SEG', 'SAB', 'A',
-    'POSIÇÃO', 'SIM', 'NÃO', 'NAO', 'SEGUNDA', 'TERCA', 'QUARTA',
-    'QUINTA', 'SEXTA',
+    'DATA', 'HORA', 'OPERADOR', 'A', 'POSIÇÃO',
+    # Dias da semana (nome da bandeja)
+    'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SAB', 'DOM',
+    'SEGUNDA', 'TERCA', 'QUARTA', 'QUINTA', 'SEXTA', 'SABADO', 'DOMINGO',
+    # Valores da coluna Liberada / Usuário
+    'SIM', 'NAO', 'USUARIO',
 }
 
 # ── Mapeamento código Matrix → nome canonical ─────────────────────────────────
@@ -147,6 +151,9 @@ def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
     AMOSTRA_COL_X = None
     all_words: list[dict] = []
 
+    # Nomes de operadores encontrados dinamicamente no PDF
+    operadores_encontrados: set[str] = set()
+
     with pdfplumber.open(source) as pdf:
         page_offset = 0.0
         for page in pdf.pages:
@@ -156,6 +163,15 @@ def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
                     EXAMES_COL_X = float(w['x0'])
                 if w['text'] == 'Amostra' and AMOSTRA_COL_X is None:
                     AMOSTRA_COL_X = float(w['x0'])
+
+            # Detectar nome do operador (palavra logo após "Operador:")
+            texts = [w['text'] for w in words]
+            for i, t in enumerate(texts):
+                if t in ('Operador:', 'OPERADOR:') and i + 1 < len(texts):
+                    op = texts[i + 1].strip().upper()
+                    if op:
+                        operadores_encontrados.add(op)
+
             for w in words:
                 all_words.append({
                     'text': w['text'],
@@ -163,6 +179,9 @@ def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
                     'y':    float(w['top']) + page_offset,
                 })
             page_offset += float(page.height)
+
+    # Adicionar operadores encontrados às palavras ignoradas
+    skip_local = SKIP_WORDS | operadores_encontrados
 
     if EXAMES_COL_X is None: EXAMES_COL_X = 228.5
     if AMOSTRA_COL_X is None: AMOSTRA_COL_X = 24.0
@@ -184,7 +203,7 @@ def parse_matrix_pdf(filepath_or_bytes) -> list[tuple[str, str]]:
         if w['x0'] < EXAMES_COL_X - 10:
             continue
         tu = w['text'].upper().strip()
-        if not tu or tu in SKIP_WORDS:
+        if not tu or tu in skip_local:
             continue
         if not _CHUNK_RE.match(tu):
             continue
