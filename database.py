@@ -1,33 +1,12 @@
 """
-database.py — Control.ILL v4.0
+database.py — Control.ILL v4.1
 Banco de dados: Google Sheets via Service Account
-- Dados NUNCA somem (Google Drive é permanente)
-- Gratuito para sempre
-- Sem pausas ou suspensões
+A chave é lida dos Secrets do Streamlit — nunca fica no código!
 """
 import hashlib
 from datetime import datetime
 
 SHEET_ID = "1GSCfw5Ct9o1lXuptSuCoL4vxS4xbLqf5MbyWWALInEA"
-
-_CREDS_DICT = {
-    "type": "service_account",
-    "project_id": "controlill",
-    "private_key_id": "72a6b2903b73b3d12ff54fd932676df66a8fa0e6",
-    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCi1BGD6fwY5RCl\nLblFCP2RoJILdLhHb6SMAkUw6pksybXrRXV6CBdCA6FHPY6RN6PJ4p1m220xyzIU\n8MWqtZci5Ke4gHKEz3Jp9zTLRwa8+HDAKPEZQGaKbgxI89JFY75FfxCsC18Z4V4Q\nx/2kVN7b8tTUcn/GqdVPbYvriOUd/dawwIi4kp1sQek5weuH27nRsF8kzofckDHt\nKRSIWbkpskm9dBTIdEQU59VyYrRUUtRhh6srVwbCrEwlQ/loSHL6UZtqCpgTW1a1\nJqEYV+6W1sVbJPCL4K/eiqtecdC6kwa4/zYJ2gHUqvxqi1p5bhS85BD9vGCeASyZ\nf1MuOSrbAgMBAAECggEADdbylNYVdv7j7EuM8hYyiecuTUpNbhz0zRsASzPAHd4Y\ngqJzuryR+tVuJtek6iji2Kz/Q0J77yiIiDPIHptdTjpFxdknuAFzMG3c5I4+lLSV\nI3AXa1Wy9tR7DNRUgftZV8orXkQqgCZMpXvUzjE8g/te0EkvHRv1pSZNfJE1JYL5\nadwzUlZlw9uztIiGmqr0koMqlIVDTaKlYQMYzWxD4D40Mv7Xxjb3R2wJY4D0YOfP\nRW2vNlBlQPlZ+Zha+oHd4cQeP9Aoj3eWnpViWvjsNMw3KPUyA7yfhptCut2KcrJz\nAZ+N6QNQvBOjmrYMULbaFD/jtTuY6nhwX/U/SRz10QKBgQDPuuLtrjZa5FzHPhxY\n4K7t8bzk0p72PaCxxdS5VEzUQfNCn+k/x8mKJNMQHYH8fDQNdG+ra5KYf4OaoMPO\nTPHFE8umBcvYNjZn/EQwf0AytIsbVb9VD2iliJmiZwE1uJpo2wr2RNRIRi3/3k+t\nfggBepoH/7vDArwaySaJXWsnQwKBgQDIqiUfc18W2AoKpBYtqN1ya2YfckGXpV85\nJjhQs3kIykyG1pD4Zxp1IvUJvOE2uYTfKmNbCV0bXkLz9aoCcMQOYfc+ZBaoOmap\n1sWwO62vlIQCoo5bm6kE7sqhKFOTkSJgENl6J+XTkOQ456TLkfbGabUC648vYaNG\nVzRJZKO4iQKBgQCUJMHFo6Jb+9Q2u5LXx5S5WNbPkW2QSq8ZWO62JOqNzWLAtu5P\ncBnJDS4ApiqXd7RfjBQ/ef4YB4hBdDlwHOunEtD/W87eKPtv+TZgJ8AO6TbzjZlf\n/hcxRlPav/7a4wYrlVsh+kAyMuqHOXI1VlY7R8YlwjmTf5XKvH1hJWBPpQKBgDmU\nyW5K9wBhIhCHoW2cxV7t/rILYVMYu0h09TgDKDojgu42aAc/3tG6JEKVFrNTbRN0\n4GnhN/yAggnrdsuYfEn8Rqx6oB3KFGesH7JAjciSf4caCmuzMT8fHro8Di+MOCcE\n7sMk68hYDYVew2U/D2dEMhMScVYRWH74yyI8ZNaxAoGBAIBgTWETy3ySSVENfH0s\nbPMm6YPMAFTc6NqjFsoLQfe06ZmeN3UvmaZ6MEP6W9UBL85vY5xKBO5fbuDqU0L0\npZmkW+VLTf7WtxKJVKp3iwVZDjJJvVfzBbmNfaenQbJhX5cNJGp9C2sBLwJEViQ8\n4KdX/ruQ3W3hf19ctVryWMUf\n-----END PRIVATE KEY-----\n",
-    "client_email": "controlill-app@controlill.iam.gserviceaccount.com",
-    "client_id": "109675994830086481265",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/controlill-app%40controlill.iam.gserviceaccount.com",
-    "universe_domain": "googleapis.com"
-}
-
-_SCOPES = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-]
 
 ABA_USUARIOS = "usuarios"
 ABA_LOTES    = "lotes"
@@ -41,6 +20,11 @@ HEADER_LOTES    = ["id","setor","nome_exame","fabricante","lote_reagente","valid
 HEADER_AMOSTRAS = ["id","lote_id","amostra","inserido_por","inserido_em"]
 HEADER_LOG      = ["id","usuario","acao","detalhe","criado_em"]
 
+_SCOPES = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+
 
 def _hash(senha: str) -> str:
     return hashlib.sha256(senha.strip().encode()).hexdigest()
@@ -50,6 +34,18 @@ def _agora() -> str:
     return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
 
+def _get_creds_dict():
+    """Lê as credenciais dos Secrets do Streamlit."""
+    import streamlit as st
+    import json
+    raw = st.secrets.get("GOOGLE_CREDENTIALS", "")
+    if not raw:
+        raise Exception("Secret GOOGLE_CREDENTIALS não encontrado no Streamlit!")
+    if isinstance(raw, str):
+        return json.loads(raw)
+    return dict(raw)
+
+
 _sh = None
 
 def _get_sheet():
@@ -57,7 +53,8 @@ def _get_sheet():
     if _sh is None:
         import gspread
         from google.oauth2.service_account import Credentials
-        creds = Credentials.from_service_account_info(_CREDS_DICT, scopes=_SCOPES)
+        creds_dict = _get_creds_dict()
+        creds = Credentials.from_service_account_info(creds_dict, scopes=_SCOPES)
         gc = gspread.authorize(creds)
         _sh = gc.open_by_key(SHEET_ID)
     return _sh
@@ -176,7 +173,7 @@ def _n_amostras(lote_id):
 def criar_lote(setor, usuario=""):
     ws = _garantir_aba(ABA_LOTES, HEADER_LOTES)
     novo_id = _proximo_id(ws)
-    ws.append_row([novo_id, setor,"","","","","","",usuario,"",_agora(),"","aberto",_agora()])
+    ws.append_row([novo_id,setor,"","","","","","",usuario,"",_agora(),"","aberto",_agora()])
     return novo_id
 
 
@@ -216,8 +213,7 @@ def reabrir_lote(lote_id, usuario=""):
         if str(row[0]) == str(lote_id):
             ws.update_cell(i, 13, "aberto")
             ws.update_cell(i, 12, "")
-            ws.update_cell(i, 10, "")
-            break
+            ws.update_cell(i, 10, ""); break
 
 
 def get_todos_lotes_abertos():
@@ -243,8 +239,7 @@ def fechar_lote(lote_id, dt_fechamento, usuario=""):
         if str(row[0]) == str(lote_id):
             ws.update_cell(i, 13, "fechado")
             ws.update_cell(i, 12, dt_fechamento)
-            ws.update_cell(i, 10, usuario)
-            break
+            ws.update_cell(i, 10, usuario); break
 
 
 # ── AMOSTRAS ──────────────────────────────────────────────────────────────────
