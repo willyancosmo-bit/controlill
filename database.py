@@ -68,16 +68,34 @@ def _get_aba(nome):
 
 
 def _garantir_aba(nome, header):
+    import gspread
+
     sh = _get_sheet()
     try:
         ws = sh.worksheet(nome)
+    except gspread.exceptions.WorksheetNotFound:
+        try:
+            ws = sh.add_worksheet(title=nome, rows=2000, cols=len(header))
+            ws.append_row(header)
+            return ws
+        except gspread.exceptions.APIError as e:
+            # Outra sessão/rerun do Streamlit criou a aba entre a checagem
+            # acima e esta tentativa de criação (condição de corrida).
+            if "already exists" in str(e):
+                ws = sh.worksheet(nome)
+            else:
+                raise
+
+    # Aba já existia: garante que o cabeçalho está presente.
+    try:
         if not ws.row_values(1):
             ws.append_row(header)
-        return ws
-    except Exception:
-        ws = sh.add_worksheet(title=nome, rows=2000, cols=len(header))
-        ws.append_row(header)
-        return ws
+    except gspread.exceptions.APIError:
+        # Falha transitória (ex.: rate limit) ao checar/gravar cabeçalho
+        # não deve derrubar o fluxo nem disparar recriação da aba.
+        pass
+
+    return ws
 
 
 def _proximo_id(ws) -> int:
