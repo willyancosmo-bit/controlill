@@ -47,6 +47,8 @@ def _get_creds_dict():
 
 
 _sh = None
+_ws_cache = {}   # nome_aba -> objeto Worksheet (evita fetch_sheet_metadata repetido)
+
 
 def _get_sheet():
     global _sh
@@ -60,9 +62,38 @@ def _get_sheet():
     return _sh
 
 
+def _with_retry(func, tentativas=4, espera_base=1.5):
+    """
+    Executa func() com retentativas (backoff exponencial) para absorver
+    erros transitórios da API do Google (429 quota exceeded, 500, 503).
+    Não faz retry de erros que não são transitórios (ex.: "already exists").
+    """
+    import time
+    import gspread
+
+    ultimo_erro = None
+    for tentativa in range(tentativas):
+        try:
+            return func()
+        except gspread.exceptions.APIError as e:
+            ultimo_erro = e
+            msg = str(e)
+            if "already exists" in msg:
+                raise
+            if tentativa < tentativas - 1:
+                time.sleep(espera_base * (2 ** tentativa))
+            else:
+                raise
+    raise ultimo_erro
+
+
 def _get_aba(nome):
+    if nome in _ws_cache:
+        return _ws_cache[nome]
     try:
-        return _get_sheet().worksheet(nome)
+        ws = _with_retry(lambda: _get_sheet().worksheet(nome))
+        _ws_cache[nome] = ws
+        return ws
     except Exception:
         return None
 
@@ -70,31 +101,36 @@ def _get_aba(nome):
 def _garantir_aba(nome, header):
     import gspread
 
+    if nome in _ws_cache:
+        return _ws_cache[nome]
+
     sh = _get_sheet()
     try:
-        ws = sh.worksheet(nome)
+        ws = _with_retry(lambda: sh.worksheet(nome))
     except gspread.exceptions.WorksheetNotFound:
         try:
-            ws = sh.add_worksheet(title=nome, rows=2000, cols=len(header))
-            ws.append_row(header)
+            ws = _with_retry(lambda: sh.add_worksheet(title=nome, rows=2000, cols=len(header)))
+            _with_retry(lambda: ws.append_row(header))
+            _ws_cache[nome] = ws
             return ws
         except gspread.exceptions.APIError as e:
             # Outra sessão/rerun do Streamlit criou a aba entre a checagem
             # acima e esta tentativa de criação (condição de corrida).
             if "already exists" in str(e):
-                ws = sh.worksheet(nome)
+                ws = _with_retry(lambda: sh.worksheet(nome))
             else:
                 raise
 
     # Aba já existia: garante que o cabeçalho está presente.
     try:
-        if not ws.row_values(1):
-            ws.append_row(header)
+        if not _with_retry(lambda: ws.row_values(1)):
+            _with_retry(lambda: ws.append_row(header))
     except gspread.exceptions.APIError:
-        # Falha transitória (ex.: rate limit) ao checar/gravar cabeçalho
-        # não deve derrubar o fluxo nem disparar recriação da aba.
+        # Falha transitória persistente ao checar/gravar cabeçalho não deve
+        # derrubar o fluxo nem disparar recriação indevida da aba.
         pass
 
+    _ws_cache[nome] = ws
     return ws
 
 
