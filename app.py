@@ -89,11 +89,6 @@ if st.session_state.usuario is None:
         else:
             st.error("Login ou senha incorretos.")
 
-    st.markdown(
-        "<p style='text-align:center;color:#90A4AE;font-size:0.75rem;margin-top:2rem'>"
-        "Primeiro acesso: login <b>admin</b> / senha <b>admin123</b></p>",
-        unsafe_allow_html=True,
-    )
     st.stop()
 
 # ── Usuário logado ────────────────────────────────────────────────────────────
@@ -106,7 +101,7 @@ IS_ADMIN = PERFIL_U == "admin"
 SETORES = [
     "Hematologia", "Urinálise", "Parasitologia",
     "Microbiologia", "Imunobioquímica", "Gasometria",
-    "Bioquímica", "Agência Transfusional",
+    "Agência Transfusional",
 ]
 
 EXAMES_POR_SETOR = {
@@ -142,11 +137,6 @@ EXAMES_POR_SETOR = {
         "Dímero-D", "HIV Teste Rápido",
     ],
     "Gasometria": ["Gasometria Arterial", "Gasometria Venosa", "Eletrodos de Gasometria"],
-    "Bioquímica": [
-        "Glicose", "Ureia", "Creatinina", "Ácido Úrico", "Colesterol Total",
-        "Triglicerídeos", "HDL Colesterol", "ALT", "AST", "GGT",
-        "Fosfatase Alcalina", "Albumina", "Proteínas Totais",
-    ],
     "Agência Transfusional": [
         "Bolsa de Sangue Total", "Concentrado de Hemácias",
         "Plasma Fresco Congelado", "Plaquetas", "Soluções de Uso Transfusional",
