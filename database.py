@@ -1,10 +1,12 @@
 """
-database.py — Control.ILL v4.1
+database.py — Control.ILL v4.2
 Banco de dados: Google Sheets via Service Account
 A chave é lida dos Secrets do Streamlit — nunca fica no código!
 """
 import hashlib
 from datetime import datetime
+
+import streamlit as st
 
 SHEET_ID = "1GSCfw5Ct9o1lXuptSuCoL4vxS4xbLqf5MbyWWALInEA"
 
@@ -36,7 +38,6 @@ def _agora() -> str:
 
 def _get_creds_dict():
     """Lê as credenciais dos Secrets do Streamlit."""
-    import streamlit as st
     import json
     raw = st.secrets.get("GOOGLE_CREDENTIALS", "")
     if not raw:
@@ -135,16 +136,26 @@ def _garantir_aba(nome, header):
 
 
 def _proximo_id(ws) -> int:
-    vals = ws.col_values(1)
+    vals = _with_retry(lambda: ws.col_values(1))
     ids = [int(v) for v in vals[1:] if str(v).isdigit()]
     return max(ids) + 1 if ids else 1
 
 
 def _todas_linhas(ws, header) -> list:
     try:
-        return ws.get_all_records(expected_headers=header)
+        return _with_retry(lambda: ws.get_all_records(expected_headers=header))
     except Exception:
         return []
+
+
+def _limpar_todos_os_caches():
+    """Limpa todo o cache de leitura — usado no init_db para garantir dados frescos."""
+    for fn in (get_todos_usuarios, get_log, get_lotes_por_setor, get_lote,
+               get_todos_lotes_abertos, contar_lotes_fechados_setor, get_amostras):
+        try:
+            fn.clear()
+        except Exception:
+            pass
 
 
 def init_db():
@@ -155,9 +166,9 @@ def init_db():
         _garantir_aba(ABA_LOG,      HEADER_LOG)
         rows = _todas_linhas(ws_u, HEADER_USUARIOS)
         if not rows:
-            ws_u.append_row([1,"Administrador","admin",_hash("admin123"),"admin",1,_agora()])
+            _with_retry(lambda: ws_u.append_row(
+                [1, "Administrador", "admin", _hash("admin123"), "admin", 1, _agora()]))
     except Exception as e:
-        import streamlit as st
         st.error(f"Erro ao conectar ao Google Sheets: {e}")
 
 
@@ -173,6 +184,7 @@ def autenticar(login, senha):
     return None
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def get_todos_usuarios():
     ws = _get_aba(ABA_USUARIOS)
     return _todas_linhas(ws, HEADER_USUARIOS) if ws else []
@@ -183,34 +195,43 @@ def criar_usuario(nome, login, senha, perfil="analista"):
     for r in _todas_linhas(ws, HEADER_USUARIOS):
         if str(r.get("login","")).lower() == login.strip().lower():
             return False, f"Login '{login}' já existe."
-    ws.append_row([_proximo_id(ws), nome.strip(), login.strip().lower(),
-                   _hash(senha), perfil, 1, _agora()])
+    _with_retry(lambda: ws.append_row([_proximo_id(ws), nome.strip(), login.strip().lower(),
+                   _hash(senha), perfil, 1, _agora()]))
+    get_todos_usuarios.clear()
     return True, "Usuário criado com sucesso."
 
 
 def alterar_senha_usuario(login, senha_nova):
     ws = _garantir_aba(ABA_USUARIOS, HEADER_USUARIOS)
-    for i, row in enumerate(ws.get_all_values()[1:], start=2):
+    valores = _with_retry(lambda: ws.get_all_values())
+    for i, row in enumerate(valores[1:], start=2):
         if row[2].lower() == login.strip().lower():
-            ws.update_cell(i, 4, _hash(senha_nova)); break
+            _with_retry(lambda: ws.update_cell(i, 4, _hash(senha_nova)))
+            break
+    get_todos_usuarios.clear()
 
 
 def toggle_usuario(usuario_id, ativo):
     ws = _garantir_aba(ABA_USUARIOS, HEADER_USUARIOS)
-    for i, row in enumerate(ws.get_all_values()[1:], start=2):
+    valores = _with_retry(lambda: ws.get_all_values())
+    for i, row in enumerate(valores[1:], start=2):
         if str(row[0]) == str(usuario_id):
-            ws.update_cell(i, 6, 1 if ativo else 0); break
+            _with_retry(lambda: ws.update_cell(i, 6, 1 if ativo else 0))
+            break
+    get_todos_usuarios.clear()
 
 
 # ── LOG ───────────────────────────────────────────────────────────────────────
 def registrar_log(usuario, acao, detalhe=""):
     try:
         ws = _garantir_aba(ABA_LOG, HEADER_LOG)
-        ws.append_row([_proximo_id(ws), usuario, acao, detalhe, _agora()])
+        _with_retry(lambda: ws.append_row([_proximo_id(ws), usuario, acao, detalhe, _agora()]))
+        get_log.clear()
     except Exception:
         pass
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def get_log(limite=200):
     ws = _get_aba(ABA_LOG)
     if not ws: return []
@@ -218,19 +239,40 @@ def get_log(limite=200):
 
 
 # ── LOTES ─────────────────────────────────────────────────────────────────────
-def _n_amostras(lote_id):
+def _contagem_amostras_por_lote() -> dict:
+    """
+    Lê a aba de amostras UMA ÚNICA VEZ e conta quantas amostras cada lote tem.
+    Evita o problema de N+1 leituras (uma leitura completa por lote).
+    """
     ws = _get_aba(ABA_AMOSTRAS)
-    if not ws: return 0
-    return sum(1 for r in ws.get_all_values()[1:] if str(r[1]) == str(lote_id))
+    if not ws:
+        return {}
+    valores = _with_retry(lambda: ws.get_all_values())
+    contagem = {}
+    for row in valores[1:]:
+        if len(row) >= 2:
+            lid = str(row[1])
+            contagem[lid] = contagem.get(lid, 0) + 1
+    return contagem
+
+
+def _n_amostras(lote_id):
+    return _contagem_amostras_por_lote().get(str(lote_id), 0)
 
 
 def criar_lote(setor, usuario=""):
     ws = _garantir_aba(ABA_LOTES, HEADER_LOTES)
     novo_id = _proximo_id(ws)
-    ws.append_row([novo_id,setor,"","","","","","",usuario,"",_agora(),"","aberto",_agora()])
+    _with_retry(lambda: ws.append_row(
+        [novo_id,setor,"","","","","","",usuario,"",_agora(),"","aberto",_agora()]))
+    get_lotes_por_setor.clear()
+    get_todos_lotes_abertos.clear()
+    contar_lotes_fechados_setor.clear()
+    get_lote.clear()
     return novo_id
 
 
+@st.cache_data(ttl=8, show_spinner=False)
 def get_lote(lote_id):
     ws = _get_aba(ABA_LOTES)
     if not ws: return None
@@ -241,19 +283,22 @@ def get_lote(lote_id):
     return None
 
 
+@st.cache_data(ttl=8, show_spinner=False)
 def get_lotes_por_setor(setor, apenas_abertos=True):
     ws = _get_aba(ABA_LOTES)
     if not ws: return []
+    contagem = _contagem_amostras_por_lote()
     result = []
     for r in _todas_linhas(ws, HEADER_LOTES):
         if r.get("setor","") != setor: continue
         if apenas_abertos and r.get("status","") != "aberto": continue
-        r["total_amostras"] = _n_amostras(r["id"])
+        r["total_amostras"] = contagem.get(str(r["id"]), 0)
         result.append(r)
     result.sort(key=lambda x: int(x.get("id",0)), reverse=True)
     return result
 
 
+@st.cache_data(ttl=15, show_spinner=False)
 def contar_lotes_fechados_setor(setor):
     ws = _get_aba(ABA_LOTES)
     if not ws: return 0
@@ -263,13 +308,17 @@ def contar_lotes_fechados_setor(setor):
 
 def reabrir_lote(lote_id, usuario=""):
     ws = _garantir_aba(ABA_LOTES, HEADER_LOTES)
-    for i, row in enumerate(ws.get_all_values()[1:], start=2):
+    valores = _with_retry(lambda: ws.get_all_values())
+    for i, row in enumerate(valores[1:], start=2):
         if str(row[0]) == str(lote_id):
-            ws.update_cell(i, 13, "aberto")
-            ws.update_cell(i, 12, "")
-            ws.update_cell(i, 10, ""); break
+            _with_retry(lambda: ws.update_cell(i, 13, "aberto"))
+            _with_retry(lambda: ws.update_cell(i, 12, ""))
+            _with_retry(lambda: ws.update_cell(i, 10, ""))
+            break
+    _invalidar_cache_lotes()
 
 
+@st.cache_data(ttl=8, show_spinner=False)
 def get_todos_lotes_abertos():
     ws = _get_aba(ABA_LOTES)
     if not ws: return []
@@ -279,41 +328,60 @@ def get_todos_lotes_abertos():
 def atualizar_lote(lote_id, nome_exame=None, fabricante=None, lote_reagente=None,
                    validade=None, cod_validacao=None, responsavel=None):
     ws = _garantir_aba(ABA_LOTES, HEADER_LOTES)
-    for i, row in enumerate(ws.get_all_values()[1:], start=2):
+    valores = _with_retry(lambda: ws.get_all_values())
+    for i, row in enumerate(valores[1:], start=2):
         if str(row[0]) == str(lote_id):
             for col, val in [(3,nome_exame),(4,fabricante),(5,lote_reagente),
                              (6,validade),(7,cod_validacao),(8,responsavel)]:
-                ws.update_cell(i, col, val or "")
+                _with_retry(lambda col=col, val=val: ws.update_cell(i, col, val or ""))
             break
+    _invalidar_cache_lotes()
 
 
 def fechar_lote(lote_id, dt_fechamento, usuario=""):
     ws = _garantir_aba(ABA_LOTES, HEADER_LOTES)
-    for i, row in enumerate(ws.get_all_values()[1:], start=2):
+    valores = _with_retry(lambda: ws.get_all_values())
+    for i, row in enumerate(valores[1:], start=2):
         if str(row[0]) == str(lote_id):
-            ws.update_cell(i, 13, "fechado")
-            ws.update_cell(i, 12, dt_fechamento)
-            ws.update_cell(i, 10, usuario); break
+            _with_retry(lambda: ws.update_cell(i, 13, "fechado"))
+            _with_retry(lambda: ws.update_cell(i, 12, dt_fechamento))
+            _with_retry(lambda: ws.update_cell(i, 10, usuario))
+            break
+    _invalidar_cache_lotes()
+
+
+def _invalidar_cache_lotes():
+    get_lotes_por_setor.clear()
+    get_lote.clear()
+    get_todos_lotes_abertos.clear()
+    contar_lotes_fechados_setor.clear()
 
 
 # ── AMOSTRAS ──────────────────────────────────────────────────────────────────
 def inserir_amostra(lote_id, amostra, usuario=""):
     try:
         ws = _garantir_aba(ABA_AMOSTRAS, HEADER_AMOSTRAS)
-        for row in ws.get_all_values()[1:]:
+        valores = _with_retry(lambda: ws.get_all_values())
+        for row in valores[1:]:
             if str(row[1]) == str(lote_id) and str(row[2]) == amostra.strip():
                 return False
-        ws.append_row([_proximo_id(ws), lote_id, amostra.strip(), usuario, _agora()])
+        _with_retry(lambda: ws.append_row(
+            [_proximo_id(ws), lote_id, amostra.strip(), usuario, _agora()]))
+        get_amostras.clear()
+        get_lotes_por_setor.clear()
+        get_lote.clear()
         return True
     except Exception:
         return False
 
 
+@st.cache_data(ttl=6, show_spinner=False)
 def get_amostras(lote_id):
     ws = _get_aba(ABA_AMOSTRAS)
     if not ws: return []
     result = []
-    for row in ws.get_all_values()[1:]:
+    valores = _with_retry(lambda: ws.get_all_values())
+    for row in valores[1:]:
         if len(row) >= 5 and str(row[1]) == str(lote_id):
             result.append((row[2], row[4], row[3]))
     return result
