@@ -452,7 +452,18 @@ st.markdown("---")
 st.markdown('<div class="sec-title">Importação Matrix</div>', unsafe_allow_html=True)
 st.markdown("Selecione o PDF da listagem de amostras emitido pelo Matrix Connect.")
 
-pdf_file = st.file_uploader("Selecionar PDF Matrix", type=["pdf"], key=f"pdf_{lote_id}")
+uploader_key = f"pdf_{lote_id}"
+try:
+    pdf_file = st.file_uploader("Selecionar PDF Matrix", type=["pdf"], key=uploader_key)
+except Exception:
+    # Estado do upload ficou inconsistente (ex.: arquivo em cache do navegador
+    # com extensão não permitida após uma atualização do app). Reseta o campo
+    # em vez de derrubar a página inteira.
+    if uploader_key in st.session_state:
+        del st.session_state[uploader_key]
+    st.warning("⚠️ O seletor de arquivo foi reiniciado. Selecione o PDF novamente.")
+    pdf_file = None
+
 if pdf_file:
     pdf_bytes = pdf_file.read()
     col_imp1, col_imp2 = st.columns(2)
