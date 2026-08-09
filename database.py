@@ -358,6 +358,52 @@ def _invalidar_cache_lotes():
 
 
 # ── AMOSTRAS ──────────────────────────────────────────────────────────────────
+def inserir_amostras_em_lote(itens, usuario=""):
+    """
+    Insere várias amostras de uma vez, de forma eficiente.
+
+    itens: lista de tuplas (lote_id, amostra)
+
+    Faz UMA leitura da planilha (pra checar duplicatas) e UMA escrita em lote
+    (append_rows), em vez de uma leitura + uma escrita por amostra — é isso
+    que torna a importação do PDF Matrix rápida mesmo com centenas de amostras.
+
+    Retorna (linhas_inseridas, total_duplicadas), onde linhas_inseridas é a
+    lista das linhas [id, lote_id, amostra, usuario, criado_em] realmente
+    gravadas (usado para montar o resumo por lote).
+    """
+    ws = _garantir_aba(ABA_AMOSTRAS, HEADER_AMOSTRAS)
+    valores = _with_retry(lambda: ws.get_all_values())
+
+    existentes = set()
+    for row in valores[1:]:
+        if len(row) >= 3:
+            existentes.add((str(row[1]), str(row[2])))
+
+    proximo_id = _proximo_id(ws)
+
+    novas_linhas = []
+    duplicadas = 0
+    ja_nesta_leva = set()
+    for lote_id, amostra in itens:
+        amostra = amostra.strip()
+        chave = (str(lote_id), amostra)
+        if chave in existentes or chave in ja_nesta_leva:
+            duplicadas += 1
+            continue
+        novas_linhas.append([proximo_id, lote_id, amostra, usuario, _agora()])
+        ja_nesta_leva.add(chave)
+        proximo_id += 1
+
+    if novas_linhas:
+        _with_retry(lambda: ws.append_rows(novas_linhas, value_input_option="USER_ENTERED"))
+        get_amostras.clear()
+        get_lotes_por_setor.clear()
+        get_lote.clear()
+
+    return novas_linhas, duplicadas
+
+
 def inserir_amostra(lote_id, amostra, usuario=""):
     try:
         ws = _garantir_aba(ABA_AMOSTRAS, HEADER_AMOSTRAS)
