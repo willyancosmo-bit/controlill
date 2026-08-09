@@ -476,16 +476,27 @@ if pdf_file:
                     lotes_ab  = db.get_todos_lotes_abertos()
                     resultado = matrix_parser.aplicar_regras(parsed, lotes_ab)
 
-                    total_inserido = 0; total_dup = 0; detalhes = []
-                    for lt_id_imp, amostras_set in resultado.items():
+                    # Junta todas as amostras de todos os lotes numa lista só,
+                    # pra inserir tudo numa única chamada em lote (bem mais
+                    # rápido do que inserir uma amostra de cada vez).
+                    todos_itens = [
+                        (lt_id_imp, am)
+                        for lt_id_imp, amostras_set in resultado.items()
+                        for am in sorted(amostras_set)
+                    ]
+                    novas_linhas, total_dup = db.inserir_amostras_em_lote(todos_itens, usuario=NOME_U)
+                    total_inserido = len(novas_linhas)
+
+                    novos_por_lote = {}
+                    for _id, lid, _am, _u, _dt in novas_linhas:
+                        novos_por_lote[lid] = novos_por_lote.get(lid, 0) + 1
+
+                    detalhes = []
+                    for lt_id_imp in resultado.keys():
                         lt_info  = next((l for l in lotes_ab if l['id'] == lt_id_imp), None)
                         nome_lt  = lt_info.get('nome_exame', '?') if lt_info else '?'
                         setor_lt = lt_info.get('setor', '?') if lt_info else '?'
-                        novos = 0
-                        for am in sorted(amostras_set):
-                            ok = db.inserir_amostra(lt_id_imp, am, usuario=NOME_U)
-                            if ok: novos += 1; total_inserido += 1
-                            else: total_dup += 1
+                        novos    = novos_por_lote.get(lt_id_imp, 0)
                         detalhes.append(f"**[{setor_lt}] {nome_lt}**: {novos} nova(s)")
 
                     if total_inserido:
